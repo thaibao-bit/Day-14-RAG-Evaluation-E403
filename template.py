@@ -45,13 +45,16 @@ class QAPair:
     Fields:
         question:        The question to answer.
         expected_answer: The reference/ground-truth answer (expert-written).
-        context:         Source context (may be empty string if not applicable).
-        metadata:        Optional metadata dict (difficulty, category, etc.).
+        context:            Source context (may be empty string if not applicable).
+        metadata:           Optional metadata dict (difficulty, category, etc.).
+        retrieved_contexts: List of retrieved chunks (ORDER = retriever rank).
+                            Used by the retrieval-side metrics (Task 2b).
     """
     # TODO: define fields
     # Hints:
     #   context: str = ""
     #   metadata: dict = field(default_factory=dict)
+    #   retrieved_contexts: list = field(default_factory=list)
     pass
 
 
@@ -78,10 +81,16 @@ class EvalResult:
         passed:         True if all three scores >= 0.5.
         failure_type:   None if passed, otherwise one of:
                         "hallucination", "irrelevant", "incomplete", "off_topic".
+        context_precision: Float 0-1 or None — quality of retrieval ranking.
+        context_recall:    Float 0-1 or None — coverage of expected by context.
+                        (Both stay None unless retrieved chunks are supplied;
+                         they are NOT part of overall_score().)
     """
     # TODO: define fields
     # Hints:
     #   failure_type: str | None = None
+    #   context_precision: float | None = None
+    #   context_recall: float | None = None
     pass
 
     def overall_score(self) -> float:
@@ -111,9 +120,21 @@ class EvalResult:
 #   f_groundedness = Feedback(provider.groundedness_measure_with_cot_reasons)
 # ---------------------------------------------------------------------------
 
+# Common English stopwords are ignored so overlap reflects *content* words,
+# not filler (otherwise "is"/"a"/"the" inflate every score).
+STOPWORDS: set[str] = {
+    "a", "an", "the", "is", "are", "was", "were", "be", "been", "being",
+    "of", "in", "on", "at", "to", "for", "with", "as", "by", "and", "or",
+    "it", "its", "this", "that", "these", "those", "from", "into", "than",
+}
+
+
 def _tokenize(text: str) -> set[str]:
-    """Lowercase word tokenization, ignoring punctuation."""
-    return set(re.findall(r"\b\w+\b", text.lower()))
+    """Lowercase word tokenization, ignoring punctuation and stopwords."""
+    if not text:
+        return set()
+    tokens = re.findall(r"\b\w+\b", text.lower())
+    return {t for t in tokens if t not in STOPWORDS}
 
 
 class RAGASEvaluator:
@@ -168,6 +189,49 @@ class RAGASEvaluator:
         # TODO
         raise NotImplementedError("Implement evaluate_completeness")
 
+    # -----------------------------------------------------------------------
+    # Task 2b — Retrieval-side metrics (evaluate the GET-CONTEXT step)
+    # -----------------------------------------------------------------------
+    # From lecture (RAG pipeline): Context Recall → Context Precision →
+    #   Faithfulness → Answer Relevancy. The two below score the RETRIEVER,
+    #   operating on a LIST of chunks (order = retriever rank).
+    # -----------------------------------------------------------------------
+
+    def evaluate_context_recall(self, contexts: list[str], expected: str) -> float:
+        """Context Recall — how much of the expected answer is covered by the
+        UNION of retrieved chunks.
+
+        Heuristic:
+            union_tokens = ⋃ _tokenize(chunk) for chunk in contexts
+            recall = |expected_tokens ∩ union_tokens| / |expected_tokens|
+            Clamp to [0.0, 1.0]. Return 1.0 if expected is empty.
+
+        Low recall => retriever missed evidence the answer needs.
+        """
+        # TODO
+        raise NotImplementedError("Implement evaluate_context_recall")
+
+    def evaluate_context_precision(
+        self,
+        contexts: list[str],
+        expected: str,
+        relevance_threshold: float = 0.1,
+    ) -> float:
+        """Context Precision — RANK-AWARE Average Precision (AP@K), like RAGAS.
+        Rewards retrievers that place RELEVANT chunks BEFORE noise.
+
+        Steps:
+            1. A chunk is "relevant" if it covers >= relevance_threshold of the
+               expected tokens:  |chunk ∩ expected| / |expected| >= threshold
+            2. Precision@k = (#relevant in top-k) / k
+            3. AP@K = (1 / #relevant) * Σ_k [ Precision@k · relevant_k ]
+
+        Return 1.0 if expected empty; 0.0 if no chunks or none relevant.
+        Reordering relevant chunks earlier (reranking) raises this score.
+        """
+        # TODO
+        raise NotImplementedError("Implement evaluate_context_precision")
+
     def run_full_eval(
         self,
         answer: str,
@@ -191,6 +255,24 @@ class RAGASEvaluator:
         """
         # TODO
         raise NotImplementedError("Implement run_full_eval")
+
+
+# ---------------------------------------------------------------------------
+# Reranking helper (used by Exercise 3.5 — boosting Context Precision)
+# ---------------------------------------------------------------------------
+
+def rerank_by_overlap(contexts: list[str], query: str) -> list[str]:
+    """A minimal lexical reranker: sort chunks by word overlap with the query,
+    most-overlapping first. Stand-in for a real cross-encoder reranker.
+
+    Reordering relevant chunks toward the top increases the rank-aware
+    Context Precision WITHOUT changing the retrieved set.
+
+    Hint: sorted(contexts, key=lambda c: len(_tokenize(c) & _tokenize(query)),
+                 reverse=True)
+    """
+    # TODO (Exercise 3.5): implement the reranker
+    raise NotImplementedError("Implement rerank_by_overlap")
 
 
 # ---------------------------------------------------------------------------

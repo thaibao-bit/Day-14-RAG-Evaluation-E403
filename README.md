@@ -8,7 +8,7 @@
 
 Sau lab này, bạn sẽ:
 1. Xây dựng **pipeline đánh giá tự động** để benchmark AI agent trên 20 test cases
-2. Áp dụng các metrics lấy cảm hứng từ **RAGAS** (faithfulness, relevance, completeness)
+2. Áp dụng các metrics lấy cảm hứng từ **RAGAS** — cả answer-side (faithfulness, relevance, completeness) lẫn retrieval-side (**context recall, context precision**)
 3. Triển khai **LLM-as-Judge** với rubric scoring 1–5 và phát hiện bias
 4. Thiết kế **golden dataset** với stratified sampling (easy/medium/hard/adversarial)
 5. Thực hiện **failure analysis** có hệ thống bằng 5 Whys và failure clustering
@@ -59,6 +59,32 @@ Question → Retriever → Context → Generator → Answer
 - Context Precision thấp → retrieve thừa, noise nhiều
 - Faithfulness thấp → hallucinate (bịa thông tin)
 - Answer Relevancy thấp → trả lời lạc đề
+
+> **Cả 4 metrics đều được tính trong lab này** (xem Nhiệm vụ 2 + 2b). Hai metrics
+> retrieval (Recall, Precision) chạy trên **danh sách chunk** (`retrieved_contexts`),
+> không phải một chuỗi context đơn.
+
+**Công thức (word-overlap heuristic dùng trong lab):**
+
+| Metric | Công thức | Mẫu số |
+|--------|-----------|--------|
+| Faithfulness | \|answer ∩ context\| / \|answer\| | answer |
+| Answer Relevancy | \|answer ∩ question\| / \|question\| | question |
+| Completeness | \|answer ∩ expected\| / \|expected\| | expected |
+| **Context Recall** | \|expected ∩ (⋃ chunks)\| / \|expected\| | expected |
+| **Context Precision** | Average Precision@K (rank-aware) — xem dưới | #relevant |
+
+**Context Precision = rank-aware Average Precision** (giống RAGAS): chunk được coi là
+*relevant* nếu phủ ≥ `relevance_threshold` (mặc định 0.1) số token của expected, rồi
+
+```
+Precision@k = (#relevant trong top-k) / k
+AP@K        = (1 / #relevant) · Σ_k [ Precision@k · relevant_k ]
+```
+
+Vì AP thưởng cho chunk relevant nằm **càng sớm càng tốt**, nên đẩy chunk relevant lên
+đầu (reranking) sẽ **tăng** điểm precision dù tập chunk không đổi → đây là nội dung
+**Exercise 3.5**.
 
 ### LLM-as-Judge
 
@@ -116,12 +142,20 @@ Framework + CI/CD = **quality gate** tự động:
 - `QAPair`: question, expected_answer, context, metadata
 - `EvalResult`: scores, passed flag, failure_type classification, overall_score()
 
-### Nhiệm vụ 2: `RAGASEvaluator`
+### Nhiệm vụ 2: `RAGASEvaluator` (answer-side)
 Triển khai 3 metrics RAGAS bằng word-overlap heuristic:
 - `evaluate_faithfulness`: answer có grounded trong context không?
 - `evaluate_relevance`: answer có trả lời đúng question không?
 - `evaluate_completeness`: answer có cover hết expected answer không?
-- `run_full_eval`: chạy cả 3 metrics, xác định failure_type
+- `run_full_eval`: chạy cả 3 metrics, xác định failure_type (nhận thêm `contexts`
+  tuỳ chọn để tính luôn 2 metrics retrieval)
+
+### Nhiệm vụ 2b: `RAGASEvaluator` (retrieval-side — chấm bước GET CONTEXT)
+Triển khai 2 metrics đánh giá chất lượng retriever (chạy trên `list[str]` chunks):
+- `evaluate_context_recall`: union các chunk có phủ hết expected answer không?
+- `evaluate_context_precision`: rank-aware Average Precision — chunk relevant có
+  được xếp lên đầu không?
+- `rerank_by_overlap`: reranker lexical đơn giản (dùng ở Exercise 3.5)
 
 ### Nhiệm vụ 3: `LLMJudge`
 - `score_response`: dùng LLM để chấm response theo rubric (scoring 1–5)

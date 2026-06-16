@@ -70,11 +70,16 @@ Implement all TODOs in `template.py`. Focus on:
 - `EvalResult` dataclass: qa_pair, actual_answer, faithfulness, relevance, completeness, passed, failure_type
 - `overall_score()` method: average of 3 metrics
 
-### Task 2: RAGASEvaluator
+### Task 2: RAGASEvaluator (answer-side)
 - `evaluate_faithfulness(answer, context)` → word overlap heuristic
 - `evaluate_relevance(answer, question)` → word overlap heuristic  
 - `evaluate_completeness(answer, expected)` → word overlap heuristic
 - `run_full_eval(...)` → combine all 3 + determine failure_type
+
+### Task 2b: RAGASEvaluator (retrieval-side — chấm bước get context)
+- `evaluate_context_recall(contexts, expected)` → union coverage của expected
+- `evaluate_context_precision(contexts, expected)` → rank-aware Average Precision
+- `rerank_by_overlap(contexts, query)` → reranker lexical (dùng ở Exercise 3.5)
 
 ### Task 3: LLMJudge
 - `score_response(question, answer, rubric)` → build prompt, call judge, parse scores
@@ -222,6 +227,99 @@ Nếu đã hoàn thành 3.1–3.3, chọn 2 trong 3 frameworks để so sánh:
 
 ---
 
+### Exercise 3.5 — Tăng Context Precision bằng Reranking (Nâng cao)
+
+> **Bối cảnh:** Hai metrics retrieval — **Context Recall** và **Context Precision** —
+> chấm điểm bước *get context* (retriever), chạy trên một **danh sách chunk**
+> (`QAPair.retrieved_contexts`), không phải chuỗi context đơn.
+>
+> - **Context Recall** = `|expected ∩ (⋃ chunks)| / |expected|` — retriever có *lấy đủ* evidence không?
+> - **Context Precision** = rank-aware Average Precision — chunk *relevant* có được *xếp lên đầu* không?
+>
+> Vì Precision tính theo thứ hạng (AP@K), **đổi thứ tự** chunk (đưa relevant lên trước)
+> sẽ tăng điểm mà **không cần đổi tập chunk** → đó chính là việc của **reranking**.
+
+#### Bước 1 — Dataset retrieval (đã cho sẵn để bạn chấm 2 metrics)
+
+Mỗi dòng là 1 truy vấn với danh sách chunk retrieve được (cố tình để **noise lên trước**):
+
+| ID | Question | Expected Answer | Retrieved chunks (theo thứ tự retriever trả về) |
+|----|----------|-----------------|--------------------------------------------------|
+| R01 | What is the capital of France? | Paris is the capital of France | `["Bananas are a tropical fruit.", "The Eiffel Tower is in Paris.", "Paris is the capital city of France."]` |
+| R02 | What does RAG stand for? | RAG stands for Retrieval-Augmented Generation | `["LLMs can hallucinate facts.", "Retrieval-Augmented Generation (RAG) combines retrieval with generation.", "Vector databases store embeddings."]` |
+| R03 | When was the Eiffel Tower built? | The Eiffel Tower was completed in 1889 | `["The tower is 330 metres tall.", "It is made of wrought iron.", "The Eiffel Tower was completed in 1889 for the World's Fair."]` |
+| R04 | What is gradient descent? | Gradient descent minimizes a loss function by following the negative gradient | `["Neural networks have layers.", "Gradient descent updates weights along the negative gradient to minimize loss.", "Learning rate controls step size."]` |
+| R05 | What is overfitting? | Overfitting is when a model memorizes training data and fails to generalize | `["Regularization adds a penalty term.", "Dropout randomly disables neurons.", "Overfitting means the model memorizes training data and generalizes poorly."]` |
+
+> Bạn có thể tự thêm 3–5 dòng từ **domain của bạn** (Exercise 3.1) — nhớ để chunk relevant **không** ở vị trí đầu.
+
+#### Bước 2 — Đo baseline (chưa rerank)
+
+Với mỗi truy vấn, gọi:
+```python
+ev = RAGASEvaluator()
+recall    = ev.evaluate_context_recall(chunks, expected)
+precision = ev.evaluate_context_precision(chunks, expected)
+```
+
+| ID | Context Recall | Context Precision (before) |
+|----|----------------|----------------------------|
+| R01 | | |
+| R02 | | |
+| R03 | | |
+| R04 | | |
+| R05 | | |
+| **Avg** | | |
+
+#### Bước 3 — Rerank rồi đo lại
+
+```python
+reranked  = rerank_by_overlap(chunks, question)   # hoặc reranker bạn tự viết
+precision = ev.evaluate_context_precision(reranked, expected)
+```
+
+| ID | Precision (before) | Precision (after rerank) | Δ |
+|----|--------------------|--------------------------|---|
+| R01 | | | |
+| R02 | | | |
+| R03 | | | |
+| R04 | | | |
+| R05 | | | |
+| **Avg** | | | |
+
+#### Bước 4 — Câu hỏi phân tích
+
+1. **Recall có đổi sau khi rerank không? Tại sao?**
+   > *Gợi ý: rerank chỉ đổi thứ tự, không thêm/bớt chunk → recall (tính trên union) không đổi.*
+
+2. **Precision tăng bao nhiêu? Vì sao reranking lại tác động đúng vào precision chứ không phải recall?**
+   > *Your answer:*
+
+3. **Khi nào cần tăng Recall thay vì Precision?** (gợi ý: recall thấp = retriever bỏ sót evidence → rerank vô dụng, phải sửa retriever)
+   > *Your answer:*
+
+#### Bước 5 — Kỹ thuật get-context để tăng điểm (chọn ≥ 3, mô tả tác động lên Recall vs Precision)
+
+| Kỹ thuật | Tác động chính | Recall hay Precision? | Ghi chú triển khai |
+|----------|----------------|-----------------------|--------------------|
+| **Reranking** (cross-encoder, ví dụ `bge-reranker`, Cohere Rerank) | Xếp lại chunk theo độ liên quan | **Precision** ↑ | Retrieve dư (top-50) rồi rerank còn top-5 |
+| **Tăng top-k khi retrieve** | Lấy nhiều chunk hơn | **Recall** ↑ (Precision có thể ↓) | Cân bằng với reranking |
+| **Hybrid search** (BM25 + vector) | Bắt cả keyword lẫn semantic | Recall ↑ | Kết hợp lexical + dense |
+| **Query rewriting / expansion** | Mở rộng truy vấn | Recall ↑ | HyDE, multi-query |
+| **Chunk size / overlap tuning** | Giảm phân mảnh evidence | Recall + Precision | Chunk quá nhỏ → recall ↓ |
+| **Metadata filtering** | Loại chunk sai domain/thời gian | Precision ↑ | Lọc trước khi rank |
+| **MMR (Maximal Marginal Relevance)** | Giảm chunk trùng lặp | Precision ↑ | Đa dạng hoá kết quả |
+
+**Pipeline khuyến nghị để tối ưu Precision (mô tả 1 đoạn):**
+> *Your answer: ví dụ "Retrieve top-50 bằng hybrid search → rerank bằng cross-encoder → giữ top-5 → MMR khử trùng lặp".*
+
+#### (Tuỳ chọn) Bước 6 — Viết reranker của riêng bạn
+
+Mặc định `rerank_by_overlap` chỉ dùng word-overlap. Hãy thử cải tiến (ví dụ: ưu tiên
+chunk phủ nhiều token *expected* hơn, hoặc phạt chunk quá dài) và đo lại precision.
+
+---
+
 ## Part 4 — Reflection (2:20–2:50)
 See `reflection.md`
 
@@ -232,6 +330,8 @@ See `reflection.md`
 - [ ] `overall_score` implemented
 - [ ] `run_regression` implemented  
 - [ ] `generate_improvement_log` implemented
+- [ ] `evaluate_context_recall` + `evaluate_context_precision` implemented (Task 2b)
+- [ ] Exercise 3.5 completed: đo Context Recall/Precision + reranking before/after
 - [ ] `exercises.md` completed: golden dataset 20 QA (stratified) + benchmark results + rubric
 - [ ] `reflection.md` written: 3 failures with 5 Whys + improvement log + CI/CD strategy
 - [ ] `solution/solution.py` copied

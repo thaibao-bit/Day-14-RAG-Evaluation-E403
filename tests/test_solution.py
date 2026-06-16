@@ -115,6 +115,68 @@ class TestRAGASEvaluator(unittest.TestCase):
         self.assertLess(score, 0.4)
 
 
+class TestContextMetrics(unittest.TestCase):
+    """Retrieval-side RAGAS metrics: Context Recall + Context Precision."""
+
+    def setUp(self):
+        self.evaluator = RAGASEvaluator()
+
+    # --- Context Recall ----------------------------------------------------
+
+    def test_context_recall_full_coverage(self):
+        chunks = ["Paris is the capital", "France is located in Europe"]
+        expected = "Paris is the capital of France"
+        score = self.evaluator.evaluate_context_recall(chunks, expected)
+        self.assertGreaterEqual(score, 0.8)
+
+    def test_context_recall_low_when_evidence_missing(self):
+        chunks = ["Bananas grow on tropical plantations year round"]
+        expected = "Quantum entanglement links distant particles"
+        score = self.evaluator.evaluate_context_recall(chunks, expected)
+        self.assertLess(score, 0.3)
+
+    def test_context_recall_in_range(self):
+        score = self.evaluator.evaluate_context_recall(["some retrieved text"], "expected answer")
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
+    # --- Context Precision (rank-aware) ------------------------------------
+
+    def test_context_precision_rewards_relevant_first(self):
+        expected = "Paris is the capital of France"
+        relevant = "Paris is the capital city of France"
+        noise = "Bananas are yellow tropical fruits grown near the equator"
+        good_order = self.evaluator.evaluate_context_precision([relevant, noise], expected)
+        bad_order = self.evaluator.evaluate_context_precision([noise, relevant], expected)
+        self.assertGreater(good_order, bad_order)
+
+    def test_context_precision_empty_contexts_is_zero(self):
+        self.assertEqual(self.evaluator.evaluate_context_precision([], "expected text"), 0.0)
+
+    def test_context_precision_in_range(self):
+        score = self.evaluator.evaluate_context_precision(
+            ["Paris is the capital of France", "unrelated noise chunk"],
+            "Paris is the capital of France",
+        )
+        self.assertGreaterEqual(score, 0.0)
+        self.assertLessEqual(score, 1.0)
+
+    # --- Reranking lifts precision ----------------------------------------
+
+    def test_reranking_improves_or_keeps_precision(self):
+        rerank = getattr(template, "rerank_by_overlap")
+        expected = "Paris is the capital of France"
+        retrieved = [
+            "Bananas are a tropical fruit rich in potassium",   # noise first
+            "Paris is the capital city of France in Europe",    # relevant, buried
+        ]
+        before = self.evaluator.evaluate_context_precision(retrieved, expected)
+        after = self.evaluator.evaluate_context_precision(
+            rerank(retrieved, expected), expected
+        )
+        self.assertGreaterEqual(after, before)
+
+
 class TestBenchmarkRunner(unittest.TestCase):
 
     def setUp(self):
